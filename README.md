@@ -49,8 +49,10 @@ Deux casquettes :
 │   ├── 01_schema.sql      #   schéma complet — SOURCE DE VÉRITÉ
 │   ├── 02_roles.sh        #   crée le rôle applicatif restreint classroom_app
 │   └── 03_seed.sql        #   données de test
-├── docker-compose.yml     # services db + api
+├── docker-compose.yml     # services db (primaire) + db_replica (standby) + api
 ├── Dockerfile             # image de l'API
+├── docs/
+│   └── DEPLOIEMENT-AZURE.md  # guide de déploiement sur une VM Azure
 ├── pyproject.toml         # dépendances (uv / pip)
 └── .env.example           # variables d'environnement à copier en .env
 ```
@@ -95,9 +97,15 @@ Variables clés (valeurs de dev par défaut dans `.env.example`) :
 | `CORS_ORIGINS` | origines front autorisées (séparées par des virgules) |
 | `PING_INTERVAL_SECONDS` | intervalle de ping des calculateurs (`0` = désactivé) |
 
-> **Ports** : Postgres est exposé sur **`localhost:5433`** côté hôte (le 5432 est
-> souvent déjà occupé par un autre Postgres). En interne (réseau Docker), l'API joint
-> toujours la base via `db:5432` — inchangé. L'API écoute sur **`localhost:8000`**.
+> **Ports** : le Postgres **primaire** est exposé sur **`localhost:5433`** côté hôte
+> (le 5432 est souvent déjà occupé par un autre Postgres), le **réplica** sur
+> **`localhost:5434`**. En interne (réseau Docker), l'API joint toujours le primaire via
+> `db:5432`. L'API écoute sur **`localhost:8000`**.
+
+> **Redondance** : la stack lance un **réplica PostgreSQL** (`db_replica`) en réplication
+> streaming depuis le primaire — copie des données en temps réel, en lecture seule, prête
+> à être promue en cas de panne. Vérifier : `docker-compose exec db psql -U classroom_admin
+> -d classroomobserv -c "SELECT state FROM pg_stat_replication;"` → `streaming`.
 
 > **Sécurité** : l'application se connecte **toujours** avec le rôle restreint
 > `classroom_app` (jamais l'admin) — exigence du cahier des charges.
@@ -233,6 +241,13 @@ pytest        # tests de fumée : /health, présence des routes, complexité mdp
 Les tests de fumée ne nécessitent pas de base de données.
 
 ---
+
+## Déploiement
+
+Guide complet de déploiement sur une **VM Azure** (toute la stack en Docker : API +
+PostgreSQL primaire + réplica) : **[`docs/DEPLOIEMENT-AZURE.md`](docs/DEPLOIEMENT-AZURE.md)**.
+Inclut la création de la VM, l'installation de Docker, l'ouverture des ports, le HTTPS via
+Caddy, les sauvegardes et la procédure de bascule (failover).
 
 ## Dépannage
 

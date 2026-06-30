@@ -10,6 +10,21 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Definir POSTGRES_PASSWORD dans .env}
       # Mot de passe du rôle applicatif restreint (utilisé par FastAPI)
       APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Definir APP_DB_PASSWORD dans .env}
+      # Mot de passe du rôle de RÉPLICATION (utilisé par le réplica db_replica)
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:?Definir REPLICATION_PASSWORD dans .env}
+    # Paramètres nécessaires à la réplication en streaming vers le standby.
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=replica"
+      - "-c"
+      - "max_wal_senders=10"
+      - "-c"
+      - "max_replication_slots=10"
+      - "-c"
+      - "hot_standby=on"
+      - "-c"
+      - "wal_keep_size=128MB"
     ports:
       # 5433 cote hote pour eviter un conflit avec un autre Postgres deja sur 5432.
       # En interne (reseau docker), la base reste joignable sur db:5432.
@@ -18,7 +33,48 @@ services:
       - pgdata:/var/lib/postgresql/data
       # Les .sql ici sont joués UNE SEULE FOIS, au tout premier démarrage
       # (quand le volume pgdata est vide), dans l'ordre alphabétique.
+      # 00_replication.sh crée le rôle de réplication et ouvre pg_hba.
       - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-classroom_admin} -d ${POSTGRES_DB:-classroomobserv}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Réplica en lecture seule (hot standby) — redondance des données du primaire.
+  # Au 1er démarrage, il se clone depuis "db" via pg_basebackup, puis suit le flux WAL.
+  db_replica:
+    image: postgres:16
+    container_name: classroomobserv-db-replica
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Mot de passe utilisé par pg_basebackup pour se connecter au primaire.
+      PGPASSWORD: ${REPLICATION_PASSWORD:?Definir REPLICATION_PASSWORD dans .env}
+    user: postgres
+    entrypoint:
+      - "bash"
+      - "-c"
+      - |
+        set -e
+        # Clone initial uniquement si le volume du réplica est vide.
+        if [ ! -s "$$PGDATA/PG_VERSION" ]; then
+          echo "[replica] Clonage initial depuis le primaire (db)..."
+          rm -rf "$$PGDATA"/*
+          until pg_basebackup -h db -p 5432 -U replicator -D "$$PGDATA" -Fp -Xs -P -R; do
+            echo "[replica] primaire pas prêt, nouvelle tentative dans 2s..."
+            sleep 2
+          done
+          echo "[replica] Clone terminé, démarrage en standby."
+        fi
+        exec docker-entrypoint.sh postgres -c hot_standby=on
+    ports:
+      # Réplica accessible en lecture sur 5434 côté hôte.
+      - "5434:5432"
+    volumes:
+      - pgreplica:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-classroom_admin} -d ${POSTGRES_DB:-classroomobserv}"]
       interval: 10s
@@ -43,3 +99,4 @@ services:
 
 volumes:
   pgdata:
+  pgreplica:
