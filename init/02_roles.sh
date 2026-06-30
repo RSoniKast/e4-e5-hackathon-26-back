@@ -20,12 +20,13 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-E
     GRANT USAGE  ON SCHEMA public TO classroom_app;
 
     GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES   IN SCHEMA public TO classroom_app;
-    GRANT USAGE, SELECT                  ON ALL SEQUENCES IN SCHEMA public TO classroom_app;
+    -- UPDATE sur les sequences = autorise setval() (recalage apres import d'ids explicites).
+    GRANT USAGE, SELECT, UPDATE           ON ALL SEQUENCES IN SCHEMA public TO classroom_app;
 
     ALTER DEFAULT PRIVILEGES IN SCHEMA public
         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO classroom_app;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public
-        GRANT USAGE, SELECT ON SEQUENCES TO classroom_app;
+        GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO classroom_app;
 EOSQL
 
 echo "Role applicatif 'classroom_app' cree (non-superuser)."

@@ -43,7 +43,8 @@ Deux casquettes :
 │   ├── api/               # routers : auth, structure, people, monitoring
 │   └── services/          # crud.py (CRUD générique) + ping.py (supervision réseau)
 ├── alembic/               # migrations (évolutions ultérieures du schéma)
-├── scripts/               # gen_hash.py, create_admin.py
+├── scripts/               # gen_hash.py, create_admin.py, import_csv.py
+├── data/                  # jeu de données CSV de démonstration (un fichier par entité)
 ├── tests/                 # tests de fumée (sans Postgres)
 ├── init/                  # bootstrap Postgres (joué au 1er démarrage) :
 │   ├── 01_schema.sql      #   schéma complet — SOURCE DE VÉRITÉ
@@ -179,6 +180,30 @@ python -m scripts.gen_hash 'Admin_aaAA11**'
 > 1 majuscule, 1 chiffre et 1 caractère spécial.
 
 ---
+
+## Remplir la base depuis des CSV
+
+Un jeu de données de démonstration est fourni dans `data/` (un CSV par entité) avec un
+script d'import qui charge le tout dans le bon ordre, en une seule transaction.
+
+```bash
+# en local (venv) — --truncate vide d'abord les tables pour un jeu propre
+python -m scripts.import_csv --truncate
+
+# en Docker
+docker-compose exec api python -m scripts.import_csv --truncate
+
+# dossier CSV personnalisé
+python -m scripts.import_csv --data ./mon_dossier
+```
+
+Fichiers : `sites.csv`, `batiments.csv`, `salles.csv`, `calculateurs.csv`,
+`personnels.csv`, `classes.csv`, `eleves.csv`, `classe_eleve.csv`, `personnel_classe.csv`.
+Les ids du CSV sont réutilisés tels quels (FK explicites), puis les séquences SERIAL sont
+recalées pour que l'API continue à attribuer des ids sans collision.
+
+> Pour importer **uniquement des élèves** via l'API (upload de fichier), utiliser plutôt
+> `POST /api/eleves/import` (voir la table des endpoints).
 
 ## Authentification
 

@@ -1,0 +1,7 @@
+personnel_id,classe_id,matiere
+1,1,Programmation
+2,1,Bases de données
+2,2,Architecture logicielle
+3,3,Cybersécurité
+4,2,Gestion de projet
+5,3,Réseaux
