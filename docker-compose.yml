@@ -1,0 +1,45 @@
+services:
+  db:
+    image: postgres:16
+    container_name: classroomobserv-db
+    restart: unless-stopped
+    environment:
+      # Rôle propriétaire / admin (migrations, init). NE PAS utiliser depuis l'app.
+      POSTGRES_DB: ${POSTGRES_DB:-classroomobserv}
+      POSTGRES_USER: ${POSTGRES_USER:-classroom_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Definir POSTGRES_PASSWORD dans .env}
+      # Mot de passe du rôle applicatif restreint (utilisé par FastAPI)
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Definir APP_DB_PASSWORD dans .env}
+    ports:
+      # 5433 cote hote pour eviter un conflit avec un autre Postgres deja sur 5432.
+      # En interne (reseau docker), la base reste joignable sur db:5432.
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Les .sql ici sont joués UNE SEULE FOIS, au tout premier démarrage
+      # (quand le volume pgdata est vide), dans l'ordre alphabétique.
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-classroom_admin} -d ${POSTGRES_DB:-classroomobserv}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    container_name: classroomobserv-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # L'app utilise le rôle restreint classroom_app (jamais l'admin). Hôte = service "db".
+      DATABASE_URL: postgresql+asyncpg://classroom_app:${APP_DB_PASSWORD:?Definir APP_DB_PASSWORD}@db:5432/${POSTGRES_DB:-classroomobserv}
+      JWT_SECRET: ${JWT_SECRET:-change-me-dev-only-0123456789abcdef}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+      PING_INTERVAL_SECONDS: ${PING_INTERVAL_SECONDS:-30}
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:
