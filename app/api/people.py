@@ -28,6 +28,7 @@ from app.schemas.people import (
     HoraireCreate,
     HoraireRead,
     PersonnelClasseAffectation,
+    PersonnelClasseRead,
     PersonnelCreate,
     PersonnelRead,
     PersonnelUpdate,
@@ -176,6 +177,44 @@ async def affecter_personnel(cid: int, payload: PersonnelClasseAffectation, db: 
     )
     await db.commit()
     return {"detail": "Personnel affecte a la classe."}
+
+
+@classes.get("/{cid}/personnels", response_model=list[PersonnelClasseRead])
+async def list_classe_personnels(cid: int, db: DbSession, _: CurrentUser):
+    await classe_crud.get(db, cid)
+    stmt = (
+        select(
+            PersonnelClasse.personnel_id,
+            Personnel.nom,
+            Personnel.prenom,
+            PersonnelClasse.matiere,
+        )
+        .join(Personnel, Personnel.id == PersonnelClasse.personnel_id)
+        .where(PersonnelClasse.classe_id == cid)
+        .order_by(Personnel.nom, Personnel.prenom)
+    )
+    rows = (await db.execute(stmt)).all()
+    return [
+        PersonnelClasseRead(
+            personnel_id=r.personnel_id,
+            nom=r.nom,
+            prenom=r.prenom,
+            matiere=r.matiere,
+        )
+        for r in rows
+    ]
+
+
+@classes.delete("/{cid}/personnels/{pid}", status_code=status.HTTP_204_NO_CONTENT,
+                dependencies=[write_admin])
+async def retirer_personnel(cid: int, pid: int, db: DbSession):
+    await db.execute(
+        delete(PersonnelClasse).where(
+            PersonnelClasse.classe_id == cid,
+            PersonnelClasse.personnel_id == pid,
+        )
+    )
+    await db.commit()
 
 
 # ============================= ELEVES ============================

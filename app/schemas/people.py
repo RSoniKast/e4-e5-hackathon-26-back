@@ -101,6 +101,13 @@ class PersonnelClasseAffectation(BaseModel):
     matiere: str = Field(default="", max_length=100)
 
 
+class PersonnelClasseRead(BaseModel):
+    personnel_id: int
+    nom: str
+    prenom: str
+    matiere: str
+
+
 class HoraireCreate(BaseModel):
     jour: int = Field(ge=1, le=7)  # 1 = lundi
     heure_debut: time
