@@ -1,8 +1,9 @@
 # Déploiement sur une VM Azure (tout en Docker)
 
 Ce guide déploie **ClassroomObserv** sur une **machine virtuelle Azure**, en lançant
-l'intégralité de la stack via `docker compose` : API FastAPI + PostgreSQL **primaire**
-+ PostgreSQL **réplica** (redondance des données).
+l'intégralité de la stack via `docker compose` : frontend Next.js + API FastAPI +
+PostgreSQL **primaire** + PostgreSQL **réplica**, le tout derrière un reverse proxy
+**Caddy** (point d'entrée unique sur le port 80).
 
 > Approche choisie : « tout en Docker » sur une VM, fidèle à l'environnement local.
 > Alternative « managée » (App Service for Containers + Azure Database for PostgreSQL) :
@@ -14,20 +15,19 @@ l'intégralité de la stack via `docker compose` : API FastAPI + PostgreSQL **pr
 
 ```
                  VM Azure (Ubuntu + Docker)
-   Internet ──▶ :443/:80 (Caddy, HTTPS)  ─┐
-                                          ├─▶ api (FastAPI)  :8000
-                                          │        │
-                                          │        ▼ écritures + lectures
-                                          │   db (Postgres PRIMAIRE)  :5432
-                                          │        │ streaming WAL
-                                          │        ▼
-                                          └─▶ db_replica (Postgres STANDBY, lecture seule)
+   Internet ──▶ :80  caddy ──/api/*──▶ api (FastAPI) ──▶ db (Postgres PRIMAIRE)
+                       │                                       │ streaming WAL
+                       │                                       ▼
+                       └────── /* ─────▶ frontend (Next.js)   db_replica (STANDBY, R/O)
 ```
 
-- **db** : primaire, reçoit toutes les écritures de l'API.
+- **caddy** : reverse proxy, **seul port exposé (80)**. Route `/api/*` vers l'API et le
+  reste vers le frontend → appels **same-origin**, pas de CORS.
+- **frontend** : app Next.js (sous-module git `./frontend`).
+- **api** : FastAPI, se connecte au primaire (`db:5432`).
+- **db** : primaire, reçoit toutes les écritures.
 - **db_replica** : se clone du primaire au 1er démarrage puis suit le flux WAL en continu
-  (redondance temps réel). En lecture seule ; sert de secours en cas de perte du primaire.
-- **api** : se connecte au primaire (`db:5432`).
+  (redondance temps réel). En lecture seule ; secours en cas de perte du primaire.
 
 ---
 
@@ -79,15 +79,13 @@ az vm create \
 ### Ouvrir les ports (NSG)
 
 ```bash
-# HTTP/HTTPS pour l'accès web (Caddy fera le HTTPS)
+# Le proxy Caddy sert le front ET l'API sur le port 80 (un seul port suffit).
 az vm open-port -g $RG -n $VM --port 80  --priority 100
-az vm open-port -g $RG -n $VM --port 443 --priority 110
-# (optionnel) accès direct à l'API sans reverse proxy
-az vm open-port -g $RG -n $VM --port 8000 --priority 120
+az vm open-port -g $RG -n $VM --port 443 --priority 110   # pour le HTTPS (domaine) plus tard
 ```
 
-> Le port **22 (SSH)** est déjà ouvert par `az vm create`. **N'ouvre pas** 5432/5434
-> (les bases ne doivent pas être exposées sur Internet).
+> Le port **22 (SSH)** est déjà ouvert par `az vm create`. **N'ouvre PAS** 5432/5434
+> (bases) ni 8000/3000 (api/front internes) : tout passe par Caddy sur le 80.
 
 ---
 
@@ -109,16 +107,18 @@ docker compose version   # vérifier (plugin v2 fourni par get.docker.com)
 ## 5. Déployer la stack
 
 ```bash
-# sur la VM
-git clone https://github.com/RSoniKast/e4-e5-hackathon-26-back.git
+# sur la VM — --recurse-submodules récupère AUSSI le frontend (sous-module)
+git clone --recurse-submodules https://github.com/RSoniKast/e4-e5-hackathon-26-back.git
 cd e4-e5-hackathon-26-back
 
 cp .env.example .env
 nano .env        # ⚠️ changer TOUS les secrets (voir ci-dessous)
 
-docker compose up -d --build
+docker compose up -d --build      # build db + replica + api + frontend + caddy
 docker compose ps
 ```
+
+> Déjà cloné sans les sous-modules ? `git submodule update --init --recursive` avant le build.
 
 ### Secrets à modifier impérativement dans `.env`
 
@@ -128,8 +128,9 @@ docker compose ps
 | `APP_DB_PASSWORD` | mot de passe du rôle applicatif `classroom_app` |
 | `REPLICATION_PASSWORD` | mot de passe du rôle de réplication |
 | `JWT_SECRET` | `openssl rand -hex 32` |
-| `CORS_ORIGINS` | URL **déployée** du front (pas localhost) |
 | `PING_INTERVAL_SECONDS` | `0` en cloud (voir note supervision plus bas) |
+| `NEXT_PUBLIC_API_URL` | **laisser vide** : le front appelle `/api` en same-origin via Caddy |
+| `CORS_ORIGINS` | inutile en same-origin ; à ne renseigner que si accès cross-origin |
 
 > Le schéma, le rôle restreint, la réplication et le seed sont appliqués
 > **automatiquement** au 1er démarrage (scripts `init/`). Pas d'étape SQL manuelle,
@@ -144,48 +145,39 @@ docker compose exec api python -m scripts.create_admin admin '<MotDePasse_aaAA11
 ### Vérifier
 
 ```bash
-curl http://localhost:8000/health                       # {"status":"ok"}
+# depuis la VM
+curl -s -o /dev/null -w "front: %{http_code}\n" http://localhost/     # 200 (via Caddy)
+docker compose exec api curl -s http://localhost:8000/health          # {"status":"ok"}
 # état de la réplication (doit afficher state=streaming) :
 docker compose exec db psql -U classroom_admin -d classroomobserv \
   -c "SELECT client_addr, state, sync_state FROM pg_stat_replication;"
 ```
 
-API accessible sur `http://<IP_PUBLIQUE>:8000/docs` (si le port 8000 est ouvert).
+➜ **Application accessible sur `http://<IP_PUBLIQUE>/`** (front + API, port 80).
 
 ---
 
-## 6. HTTPS automatique avec Caddy (recommandé)
+## 6. HTTPS automatique (Caddy est déjà dans la stack)
 
-Pour servir l'API en HTTPS avec un certificat Let's Encrypt automatique, ajoute un
-reverse proxy **Caddy**. Il te faut un **nom de domaine** pointant sur l'IP publique.
+Le service **caddy** est déjà présent (point d'entrée port 80). Pour activer le HTTPS
+avec un certificat Let's Encrypt automatique, il te faut un **nom de domaine** pointant
+sur l'IP publique. Remplace alors la 1re ligne du `Caddyfile` :
 
-`Caddyfile` à la racine :
-
-```
-api.mondomaine.fr {
-    reverse_proxy api:8000
-}
-```
-
-Bloc à ajouter dans `docker-compose.yml` (service `caddy`) :
-
-```yaml
-  caddy:
-    image: caddy:2
-    restart: unless-stopped
-    depends_on: [api]
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-# ... et dans la section volumes: ajouter  caddy_data:  et  caddy_config:
+```diff
+- :80 {
++ mondomaine.fr {
+      handle /api/* {
+          reverse_proxy api:8000
+      }
+      handle {
+          reverse_proxy frontend:3000
+      }
+  }
 ```
 
-Caddy obtient et renouvelle le certificat tout seul. L'API est alors sur
-`https://api.mondomaine.fr` (et tu peux refermer le port 8000 dans le NSG).
+Puis `docker compose up -d caddy`. Caddy obtient et renouvelle le certificat tout seul ;
+l'appli est alors sur `https://mondomaine.fr` (pense à ouvrir le **443** dans le NSG, déjà
+fait à l'étape 3).
 
 ---
 

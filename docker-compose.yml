@@ -92,11 +92,46 @@ services:
       # L'app utilise le rôle restreint classroom_app (jamais l'admin). Hôte = service "db".
       DATABASE_URL: postgresql+asyncpg://classroom_app:${APP_DB_PASSWORD:?Definir APP_DB_PASSWORD}@db:5432/${POSTGRES_DB:-classroomobserv}
       JWT_SECRET: ${JWT_SECRET:-change-me-dev-only-0123456789abcdef}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+      # Front servi en same-origin derrière Caddy : CORS non nécessaire, mais on garde
+      # localhost pour le dev direct. Ajouter l'URL publique si appel cross-origin.
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost,http://localhost:5173,http://localhost:3000}
       PING_INTERVAL_SECONDS: ${PING_INTERVAL_SECONDS:-30}
     ports:
+      # Exposé pour debug direct ; en prod l'entrée est le proxy Caddy (port 80).
       - "8000:8000"
+
+  # Frontend Next.js (sous-module git ./frontend). Build "standalone".
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Vide => le front appelle /api en same-origin via Caddy (recommandé).
+        NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-}"
+    container_name: classroomobserv-front
+    restart: unless-stopped
+    depends_on:
+      - api
+    # Pas de port publié : accessible uniquement via le proxy Caddy.
+    expose:
+      - "3000"
+
+  # Reverse proxy : point d'entrée unique (port 80) pour le front + l'API.
+  caddy:
+    image: caddy:2
+    container_name: classroomobserv-caddy
+    restart: unless-stopped
+    depends_on:
+      - api
+      - frontend
+    ports:
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
 
 volumes:
   pgdata:
   pgreplica:
+  caddy_data:
+  caddy_config:

@@ -50,8 +50,10 @@ Deux casquettes :
 │   ├── 01_schema.sql      #   schéma complet — SOURCE DE VÉRITÉ
 │   ├── 02_roles.sh        #   crée le rôle applicatif restreint classroom_app
 │   └── 03_seed.sql        #   données de test
-├── docker-compose.yml     # services db (primaire) + db_replica (standby) + api
+├── docker-compose.yml     # db (primaire) + db_replica + api + frontend + caddy (proxy)
 ├── Dockerfile             # image de l'API
+├── Caddyfile              # reverse proxy : /api -> api, le reste -> frontend
+├── frontend/              # SOUS-MODULE git (repo Next.js e4-e5-hackathon-26-front)
 ├── docs/
 │   └── DEPLOIEMENT-AZURE.md  # guide de déploiement sur une VM Azure
 ├── pyproject.toml         # dépendances (uv / pip)
@@ -81,7 +83,25 @@ colima stop           # arrête la VM quand on a fini
 
 ---
 
+## Architecture (docker compose)
+
+```
+Navigateur ──▶ :80  Caddy (reverse proxy)
+                     ├─ /api/*  ──▶ api (FastAPI) ──▶ db (Postgres) ──▶ db_replica
+                     └─ /*      ──▶ frontend (Next.js)
+```
+
+Le front (sous-module `frontend/`) appelle l'API en **same-origin** (`/api/...`) via Caddy :
+pas de CORS, pas d'URL d'API figée. **Point d'entrée unique : http://localhost/** (port 80).
+
 ## 1. Configuration
+
+> Le frontend est un **sous-module git**. Cloner le dépôt avec `--recurse-submodules` :
+> ```bash
+> git clone --recurse-submodules https://github.com/RSoniKast/e4-e5-hackathon-26-back.git
+> # déjà cloné sans les sous-modules ? :
+> git submodule update --init --recursive
+> ```
 
 ```bash
 cp .env.example .env        # ajuster les secrets pour la prod
@@ -118,29 +138,35 @@ Variables clés (valeurs de dev par défaut dans `.env.example`) :
 ```bash
 # (Colima : colima start  d'abord)
 
-# Build + démarrage de la base ET de l'API
+# Build + démarrage de TOUTE la stack (db + replica + api + frontend + caddy)
 docker-compose up --build -d
 
-# Vérifier que l'API répond
-curl http://localhost:8000/health        # -> {"status":"ok"}
+# Vérifier
+curl http://localhost/api/../health 2>/dev/null; curl http://localhost:8000/health  # {"status":"ok"}
+curl -s -o /dev/null -w "front: %{http_code}\n" http://localhost/                    # 200
 
 # Créer le premier administrateur
 docker-compose exec api python -m scripts.create_admin admin 'Admin_aaAA11**'
 ```
 
-➜ Documentation interactive (Swagger) : **http://localhost:8000/docs**
+➜ **Application : http://localhost/** — Swagger de l'API : **http://localhost:8000/docs**
 
 Gestion du cycle de vie :
 
 ```bash
-docker-compose ps                  # état des conteneurs
-docker-compose logs -f api         # logs de l'API
-docker-compose logs -f db          # logs Postgres
-docker-compose up -d --build api   # rebuild + relancer l'API après une modif de code
-docker-compose restart api         # redémarrer l'API
-docker-compose down                # arrêter
-docker-compose down -v             # arrêter + RESET complet (rejoue init/ au prochain up)
+docker-compose ps                       # état des conteneurs
+docker-compose logs -f api              # logs de l'API
+docker-compose logs -f frontend caddy   # logs front + proxy
+docker-compose up -d --build frontend   # rebuild le front après un pull du sous-module
+docker-compose down                     # arrêter
+docker-compose down -v                  # arrêter + RESET complet (rejoue init/ au prochain up)
 ```
+
+> **Mettre à jour le front** (nouveau commit sur le repo Next.js) :
+> ```bash
+> git submodule update --remote frontend   # récupère le dernier commit du front
+> docker-compose up -d --build frontend
+> ```
 
 ---
 
