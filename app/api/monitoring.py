@@ -1,9 +1,12 @@
 """Ingestion IoT + supervision : releves, etat reseau, mesures par salle."""
 from __future__ import annotations
 
+import base64
+import json
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
+from pydantic import ValidationError
 from sqlalchemy import func, select
 
 from app.deps import CurrentUser, DbSession
@@ -35,13 +38,62 @@ async def ingest_releve(payload: ReleveCreate, db: DbSession):
     return releve
 
 
-@releves.post("/arduino", response_model=ReleveRead, status_code=status.HTTP_201_CREATED)
-async def ingest_releve_arduino(payload: ReleveArduino, db: DbSession):
-    """Ingestion au format compact Arduino/VM : {id, t, l, p, f, o}.
+def _unwrap_arduino_body(body: object) -> dict:
+    """Accepte plusieurs formats sans rien changer cote Arduino/passerelle :
 
-    Mappe vers la table releve. Renvoie 404 si le calculateur n'existe pas
-    (message clair plutot qu'une violation de cle etrangere).
+    - clair            : {"id":1,"t":22.5,"l":600,"p":true,"f":false,"o":true}
+    - enveloppe base64 : {"data":"<base64 du JSON clair ci-dessus>"}
+
+    (Si la trame est REELLEMENT chiffree — AES et non simple base64 — il faut
+    la cle/l'algorithme : le decodage echouera ici avec un message explicite.)
     """
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=422, detail="Corps JSON attendu (objet).")
+
+    # Deja au format clair
+    if "id" in body:
+        return body
+
+    # Enveloppe {"data": "..."} -> on decode le base64 puis on parse le JSON
+    if "data" in body and isinstance(body["data"], str):
+        try:
+            decoded = base64.b64decode(body["data"])
+            inner = json.loads(decoded)
+        except Exception:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Trame 'data' illisible : base64(JSON) attendu. Si la trame est "
+                    "chiffree (AES...), fournir la cle/l'algorithme pour la dechiffrer."
+                ),
+            )
+        if isinstance(inner, dict):
+            return inner
+
+    raise HTTPException(
+        status_code=422,
+        detail="Format non reconnu : attendu {id,t,l,p,f,o} ou {\"data\":\"base64...\"}.",
+    )
+
+
+@releves.post("/arduino", response_model=ReleveRead, status_code=status.HTTP_201_CREATED)
+async def ingest_releve_arduino(request: Request, db: DbSession):
+    """Ingestion Arduino/VM, tolerante au format (clair OU enveloppe base64).
+
+    Mappe {id, t, l, p, f, o} vers la table releve. 404 si le calculateur
+    n'existe pas ; 422 si le format/decodage est invalide.
+    """
+    try:
+        raw = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON invalide ou manquant.")
+
+    data = _unwrap_arduino_body(raw)
+    try:
+        payload = ReleveArduino(**data)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors())
+
     if await db.get(Calculateur, payload.id) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
