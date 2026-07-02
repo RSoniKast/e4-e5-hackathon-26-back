@@ -262,6 +262,7 @@ l'**écriture (POST/PUT/DELETE) est réservée au rôle `administrateur`**.
 | Élèves        | CRUD `/eleves` + `POST /eleves/import` (CSV) | 201 / 404 |
 | Visualisation | `GET /salles/{id}/mesures` (dernière mesure + état + alerte) | 200 / 404 |
 | Ingestion IoT | `POST /releves` (mesures capteurs) | 201 |
+| Ingestion Arduino | `POST /releves/arduino` (format compact `{id,t,l,p,f,o}`) | 201 / 404 |
 
 Conventions HTTP : **201** création, **404** introuvable, **409** conflit d'unicité ou
 suppression interdite (site/bâtiment avec enfants), **422** validation.

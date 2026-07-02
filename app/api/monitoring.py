@@ -11,6 +11,7 @@ from app.models import Calculateur, EtatCalculateurLog, Releve, Salle
 from app.schemas.sensors import (
     EtatCalculateurRead,
     MesuresSalle,
+    ReleveArduino,
     ReleveCreate,
     ReleveRead,
 )
@@ -28,6 +29,32 @@ async def ingest_releve(payload: ReleveCreate, db: DbSession):
     """
     data = payload.model_dump(exclude_none=True)
     releve = Releve(**data)
+    db.add(releve)
+    await db.commit()
+    await db.refresh(releve)
+    return releve
+
+
+@releves.post("/arduino", response_model=ReleveRead, status_code=status.HTTP_201_CREATED)
+async def ingest_releve_arduino(payload: ReleveArduino, db: DbSession):
+    """Ingestion au format compact Arduino/VM : {id, t, l, p, f, o}.
+
+    Mappe vers la table releve. Renvoie 404 si le calculateur n'existe pas
+    (message clair plutot qu'une violation de cle etrangere).
+    """
+    if await db.get(Calculateur, payload.id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Calculateur introuvable (id={payload.id}).",
+        )
+    releve = Releve(
+        calculateur_id=payload.id,
+        temperature=payload.t,
+        luminosite=payload.l,
+        presence=payload.p,
+        fenetre_ouverte=payload.f,
+        porte_ouverte=payload.o,
+    )
     db.add(releve)
     await db.commit()
     await db.refresh(releve)
