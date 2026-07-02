@@ -19,6 +19,20 @@ class ReleveCreate(BaseModel):
     mesure_at: datetime | None = None  # sinon now() cote serveur
 
 
+class ReleveArduino(BaseModel):
+    """Format compact envoye par l'Arduino / la VM (cf. Azure Function).
+
+    id=calculateur, t=temperature, l=luminosite, p=presence, f=fenetre, o=porte.
+    """
+
+    id: int
+    t: Decimal | None = Field(default=None, ge=-20, le=50)
+    l: int | None = Field(default=None, ge=0, le=1023)
+    p: bool | None = None
+    f: bool | None = None
+    o: bool | None = None
+
+
 class ReleveRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int

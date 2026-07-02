@@ -1,0 +1,16 @@
+# Reverse proxy : une seule entrée (port 80) pour le front ET l'API.
+#   /api/*  -> backend FastAPI (service "api")
+#   le reste -> frontend Next.js (service "frontend")
+# Le navigateur appelle donc /api en same-origin => pas de CORS, pas d'IP figée au build.
+#
+# Pour du HTTPS automatique (Let's Encrypt), remplacer ":80" par le nom de domaine,
+# ex :  api.mondomaine.fr {  ... }   (Caddy gère le certificat tout seul).
+:80 {
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
+	handle {
+		reverse_proxy frontend:3000
+	}
+}
