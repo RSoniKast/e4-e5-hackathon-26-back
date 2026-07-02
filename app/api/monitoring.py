@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import ValidationError
 from sqlalchemy import func, select
 
+from app.core.crypto import decrypt_frame
 from app.deps import CurrentUser, DbSession
 from app.models import Calculateur, EtatCalculateurLog, Releve, Salle
 from app.schemas.sensors import (
@@ -54,26 +55,41 @@ def _unwrap_arduino_body(body: object) -> dict:
     if "id" in body:
         return body
 
-    # Enveloppe {"data": "..."} -> on decode le base64 puis on parse le JSON
+    # Enveloppe {"data": "..."} : base64 -> (JSON clair | trame AES a dechiffrer) -> JSON
     if "data" in body and isinstance(body["data"], str):
         try:
             decoded = base64.b64decode(body["data"])
-            inner = json.loads(decoded)
         except Exception:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "Trame 'data' illisible : base64(JSON) attendu. Si la trame est "
-                    "chiffree (AES...), fournir la cle/l'algorithme pour la dechiffrer."
-                ),
-            )
+            raise HTTPException(status_code=422, detail="Champ 'data' : base64 invalide.")
+
+        # 1) le base64 contient directement du JSON clair ?
+        inner = _try_json(decoded)
+        # 2) sinon, c'est une trame chiffree AES (CBC puis GCM) -> JSON
+        if inner is None:
+            clear = decrypt_frame(decoded)
+            inner = _try_json(clear) if clear is not None else None
+
         if isinstance(inner, dict):
             return inner
+        raise HTTPException(
+            status_code=422,
+            detail="Trame 'data' indechiffrable (base64/AES) ou JSON interne invalide.",
+        )
 
     raise HTTPException(
         status_code=422,
         detail="Format non reconnu : attendu {id,t,l,p,f,o} ou {\"data\":\"base64...\"}.",
     )
+
+
+def _try_json(raw: bytes | None) -> dict | None:
+    if not raw:
+        return None
+    try:
+        val = json.loads(raw)
+    except Exception:
+        return None
+    return val if isinstance(val, dict) else None
 
 
 @releves.post("/arduino", response_model=ReleveRead, status_code=status.HTTP_201_CREATED)

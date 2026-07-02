@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     # Supervision : intervalle de ping en secondes (0 = tache de fond desactivee)
     ping_interval_seconds: int = 30
 
+    # Dechiffrement des trames Arduino (AES). Cles en HEX, identiques a la Azure Function.
+    # Valeurs par defaut = celles de la Function (clef d'exemple AES-128, IV nul).
+    aes_key_hex: str = "2B7E151628AED2A6ABF7158809CF4F3C"
+    aes_iv_hex: str = "00000000000000000000000000000000"
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_origins(cls, v: object) -> object:
